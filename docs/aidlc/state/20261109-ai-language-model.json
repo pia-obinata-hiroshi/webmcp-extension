@@ -1,0 +1,51 @@
+{
+  "taskId": "20261109-ai-language-model",
+  "completedStages": [
+    "intake",
+    "ideation",
+    "architect",
+    "artifact-lint",
+    "gate-design",
+    "implement",
+    "sensor",
+    "review",
+    "learn"
+  ],
+  "completedWUs": [
+    "WU-1",
+    "WU-2",
+    "WU-3"
+  ],
+  "failedWUs": [],
+  "retries": 0,
+  "ruleCandidates": [
+    {
+      "text": "レガシー・外部名前空間のグローバル検出はプロトタイプチェーンを辿る in 演算子ではなく own-property チェック（Object.hasOwn 相当）で行い、検出対象が getter/Proxy を持ち得る場合は検証と書き込みの間の再入を考慮する",
+      "source": "review/blackhat",
+      "status": "approved"
+    },
+    {
+      "text": "モジュール評価順序に依存する import は side-effect と named の二重記述を避け一本化し、import organizer の再ソートで順序が壊れない構造にする",
+      "source": "review/typist",
+      "status": "approved"
+    },
+    {
+      "text": "外部オブジェクトの形状検出（ファクトリ認定等）は単一メソッドの存在だけでなく、用途固有の複数メンバで認定し誤検出を防ぐ",
+      "source": "review/blackhat",
+      "status": "approved"
+    },
+    {
+      "text": "テストでグローバルを差し込むスタブは既存値を必ず退避し、undo で previous === undefined なら delete・それ以外は元値復元のパターンで巻き戻す",
+      "source": "review/typist",
+      "status": "rejected"
+    },
+    {
+      "text": "副作用のある呼び出しのリトライでは catch 対象を目的の失敗のみに限定し、成功後の後処理が投げるエラーを誤認しないよう try 範囲を分離する",
+      "source": "review/blackhat,typist",
+      "status": "approved"
+    }
+  ],
+  "scope": "standard",
+  "currentStage": "done",
+  "approved": true
+}

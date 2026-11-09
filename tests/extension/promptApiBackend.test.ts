@@ -57,14 +57,11 @@ interface Stub {
 }
 
 /**
- * Stands in for the browser's Prompt API: every turn of `script` is what one
- * promptStreaming() call streams back. A turn that is `null` never ends, until
- * it is aborted.
+ * The globals a build with the Prompt API's tool use exposes. Kept apart from
+ * the `LanguageModel` stub so a legacy namespace can be installed with them —
+ * a legacy build that has tool calling — or without.
  */
-function installPromptApiStub(script: Array<StubTurn | null>): Stub {
-  const stub: Stub = { creates: [], inputs: [], sessions: [], destroyed: 0, availability: 'available', usagePerTurn: 0, overflowOnTurn: 0, unsupportedLanguages: [] };
-  let turn = 0;
-
+function installToolUseClasses() {
   const globals = globalThis as unknown as Record<string, unknown>;
   globals.LanguageModelToolCall = class {
     constructor(init: unknown) {
@@ -81,6 +78,19 @@ function installPromptApiStub(script: Array<StubTurn | null>): Stub {
       Object.assign(this, init as object, { kind: 'error' });
     }
   };
+}
+
+/**
+ * Stands in for the browser's Prompt API: every turn of `script` is what one
+ * promptStreaming() call streams back. A turn that is `null` never ends, until
+ * it is aborted.
+ */
+function installPromptApiStub(script: Array<StubTurn | null>): Stub {
+  const stub: Stub = { creates: [], inputs: [], sessions: [], destroyed: 0, availability: 'available', usagePerTurn: 0, overflowOnTurn: 0, unsupportedLanguages: [] };
+  let turn = 0;
+
+  const globals = globalThis as unknown as Record<string, unknown>;
+  installToolUseClasses();
   globals.LanguageModel = {
     availability: async (options?: { expectedInputs?: Array<{ languages?: string[] }> }) => {
       const languages = options?.expectedInputs?.flatMap((expected) => expected.languages ?? []) ?? [];
@@ -141,6 +151,225 @@ function uninstallPromptApiStub() {
   delete globals.LanguageModelToolSuccess;
   delete globals.LanguageModelToolError;
   delete globals.Summarizer;
+}
+
+/** A legacy namespace the Origin Trial era Prompt API was exposed under. */
+type LegacyNamespace = 'aiOriginTrial' | 'ai';
+
+interface LegacyStub {
+  /** The object installed as the namespace's `languageModel`. */
+  factory: Record<string, unknown>;
+  /** The options create() saw, a call that was retried included. */
+  creates: Array<Record<string, unknown>>;
+  /** How often availability(), or capabilities() for the older shape, was asked. */
+  availabilityCalls: number;
+  inputs: unknown[];
+  sessions: Array<EventTarget & Record<string, unknown>>;
+  destroyed: number;
+  /**
+   * The factory's availability answer, in whichever words the stubbed shape
+   * uses: 'available'/'downloadable'/'unavailable' for availability(), or
+   * 'readily'/'after-download'/'no' for capabilities().
+   */
+  availability: string;
+  usagePerTurn: number;
+}
+
+interface LegacyStubOptions {
+  /** Answer through the old capabilities() instead of availability(). */
+  oldCapabilities?: boolean;
+  /** Report context through inputUsage/inputQuota, not contextUsage/contextWindow. */
+  oldSessionProps?: boolean;
+  /**
+   * Reject a create() whose initialPrompts carry a role:'system' prompt, the
+   * way the old signature that took `systemPrompt` instead did.
+   */
+  oldCreateSignature?: boolean;
+}
+
+/**
+ * Builds a `languageModel` factory of the Origin Trial era: the same scripted
+ * sessions as installPromptApiStub, behind whichever of the era's shapes the
+ * options pick. Nothing is installed yet — installLegacyNamespace() does that.
+ */
+function createLegacyPromptApiStub(
+  script: Array<StubTurn | null>,
+  { oldCapabilities = false, oldSessionProps = false, oldCreateSignature = false }: LegacyStubOptions = {}
+): LegacyStub {
+  const stub: LegacyStub = {
+    factory: {},
+    creates: [],
+    availabilityCalls: 0,
+    inputs: [],
+    sessions: [],
+    destroyed: 0,
+    availability: oldCapabilities ? 'readily' : 'available',
+    usagePerTurn: 0,
+  };
+  let turn = 0;
+
+  const needsDownload = () =>
+    oldCapabilities ? stub.availability === 'after-download' : stub.availability !== 'available';
+
+  stub.factory = {
+    ...(oldCapabilities
+      ? {
+          capabilities: async () => {
+            stub.availabilityCalls++;
+            return {
+              available: stub.availability,
+              defaultTopK: 3,
+              maxTopK: 128,
+              defaultTemperature: 0.8,
+              maxTemperature: 2,
+            };
+          },
+        }
+      : {
+          availability: async () => {
+            stub.availabilityCalls++;
+            return stub.availability;
+          },
+        }),
+    create: async (options: Record<string, unknown> = {}) => {
+      const initialPrompts = options.initialPrompts as Array<{ role?: string }> | undefined;
+      stub.creates.push({ ...options, ...(initialPrompts && { initialPrompts: [...initialPrompts] }) });
+      if (oldCreateSignature && initialPrompts?.some((prompt) => prompt?.role === 'system')) {
+        throw new TypeError('The old languageModel.create() takes a systemPrompt option, not a role of initialPrompts.');
+      }
+      const monitor = new EventTarget();
+      (options.monitor as ((m: EventTarget) => void) | undefined)?.(monitor);
+      if (needsDownload()) {
+        for (const loaded of [0, 0.5, 1]) {
+          monitor.dispatchEvent(Object.assign(new Event('downloadprogress'), { loaded, total: 1 }));
+        }
+      }
+
+      const session = Object.assign(new EventTarget(), {
+        destroy() {
+          stub.destroyed++;
+        },
+        promptStreaming(input: unknown, { signal }: { signal?: AbortSignal } = {}) {
+          stub.inputs.push(input);
+          if (oldSessionProps) {
+            session.inputUsage = (session.inputUsage as number) + stub.usagePerTurn;
+          } else {
+            session.contextUsage = (session.contextUsage as number) + stub.usagePerTurn;
+          }
+          const chunks = script[++turn - 1];
+          if (chunks === null) {
+            return new ReadableStream({
+              start(controller) {
+                signal?.addEventListener('abort', () => controller.error(signal.reason));
+              },
+            });
+          }
+          return new ReadableStream({
+            start(controller) {
+              for (const chunk of chunks ?? ['']) controller.enqueue(chunk);
+              controller.close();
+            },
+          });
+        },
+      }) as unknown as EventTarget & Record<string, unknown>;
+      if (oldSessionProps) {
+        session.inputUsage = 0;
+        session.inputQuota = 1000;
+      } else {
+        session.contextUsage = 0;
+        session.contextWindow = 1000;
+      }
+      stub.sessions.push(session);
+      return session;
+    },
+  };
+  return stub;
+}
+
+/** What installing a legacy namespace changed, for taking it all back. */
+const undoLegacyNamespace: Array<() => void> = [];
+
+/**
+ * Puts `factory` at the legacy `namespace`: `chrome.aiOriginTrial.languageModel`
+ * or `ai.languageModel` (the `window.ai` of a page context). A `chrome`/`ai`
+ * that was already there is kept, and only the member the install added is
+ * removed again — through `Record<string, unknown>` all the way, so the
+ * `@types/chrome` globals stay out of it.
+ */
+function installLegacyNamespace(namespace: LegacyNamespace, factory: Record<string, unknown>): void {
+  const globals = globalThis as unknown as Record<string, unknown>;
+
+  if (namespace === 'aiOriginTrial') {
+    let chrome = globals.chrome;
+    if (typeof chrome !== 'object' || chrome === null) {
+      globals.chrome = chrome = {};
+      undoLegacyNamespace.push(() => {
+        delete globals.chrome;
+      });
+    }
+    const chromeRoot = chrome as Record<string, unknown>;
+    let originTrial = chromeRoot.aiOriginTrial;
+    if (typeof originTrial !== 'object' || originTrial === null) {
+      chromeRoot.aiOriginTrial = originTrial = {};
+      undoLegacyNamespace.push(() => {
+        delete chromeRoot.aiOriginTrial;
+      });
+    }
+    const originTrialRoot = originTrial as Record<string, unknown>;
+    const previous = originTrialRoot.languageModel;
+    originTrialRoot.languageModel = factory;
+    undoLegacyNamespace.push(() => {
+      if (previous === undefined) delete originTrialRoot.languageModel;
+      else originTrialRoot.languageModel = previous;
+    });
+    return;
+  }
+
+  let ai = globals.ai;
+  if (typeof ai !== 'object' || ai === null) {
+    globals.ai = ai = {};
+    undoLegacyNamespace.push(() => {
+      delete globals.ai;
+    });
+  }
+  const aiRoot = ai as Record<string, unknown>;
+  const previous = aiRoot.languageModel;
+  aiRoot.languageModel = factory;
+  undoLegacyNamespace.push(() => {
+    if (previous === undefined) delete aiRoot.languageModel;
+    else aiRoot.languageModel = previous;
+  });
+}
+
+/**
+ * Stands in for an Origin Trial era browser: a `languageModel` factory under
+ * `namespace`, and no `LanguageModel` global — the compat shim is what puts
+ * one there when the backend asks for it. `toolClasses: false` stubs a legacy
+ * build without tool calling, for the degradation tests.
+ */
+function installLegacyPromptApiStub(
+  script: Array<StubTurn | null>,
+  { namespace, toolClasses = true, ...options }: LegacyStubOptions & { namespace: LegacyNamespace; toolClasses?: boolean }
+): LegacyStub {
+  // A leftover LanguageModel would win over the namespace about to be
+  // installed, and quietly change what the test detects.
+  assert.equal('LanguageModel' in globalThis, false, 'a Prompt API stub was left installed');
+  const stub = createLegacyPromptApiStub(script, options);
+  installLegacyNamespace(namespace, stub.factory);
+  if (toolClasses) installToolUseClasses();
+  return stub;
+}
+
+function uninstallLegacyPromptApiStub() {
+  resetOnDeviceChat();
+  setOnDeviceModelUi();
+  const globals = globalThis as unknown as Record<string, unknown>;
+  // The facade the shim installed goes too, so the next test detects fresh.
+  delete globals.LanguageModel;
+  for (const undo of undoLegacyNamespace.splice(0).reverse()) undo();
+  delete globals.LanguageModelToolCall;
+  delete globals.LanguageModelToolSuccess;
+  delete globals.LanguageModelToolError;
 }
 
 const BOOK_TOOL = {
@@ -1320,3 +1549,251 @@ for (const [when, otherTabInBetween] of [
     }
   });
 }
+
+// ── Legacy namespaces: chrome.aiOriginTrial / window.ai ──────────────────────
+
+test('the chrome.aiOriginTrial legacy namespace is detected and answers a text turn', async () => {
+  const stub = installLegacyPromptApiStub([['Hello from the origin trial.']], { namespace: 'aiOriginTrial' });
+  try {
+    assert.equal(isPromptApiSupported(), true);
+    const result = await sendOnDeviceChat({ message: 'Hi', tools: [] });
+    assert.equal(result.text, 'Hello from the origin trial.');
+    assert.equal(stub.creates.length, 1);
+  } finally {
+    uninstallLegacyPromptApiStub();
+  }
+});
+
+test('the window.ai legacy namespace is detected and answers a text turn', async () => {
+  const stub = installLegacyPromptApiStub([['Hello from window.ai.']], { namespace: 'ai' });
+  try {
+    assert.equal(isPromptApiSupported(), true);
+    const result = await sendOnDeviceChat({ message: 'Hi', tools: [] });
+    assert.equal(result.text, 'Hello from window.ai.');
+    assert.equal(stub.creates.length, 1);
+  } finally {
+    uninstallLegacyPromptApiStub();
+  }
+});
+
+test('chrome.aiOriginTrial wins when both legacy namespaces exist', async () => {
+  const originTrial = createLegacyPromptApiStub([['from aiOriginTrial']]);
+  const windowAi = createLegacyPromptApiStub([['from window.ai']]);
+  installLegacyNamespace('aiOriginTrial', originTrial.factory);
+  installLegacyNamespace('ai', windowAi.factory);
+  installToolUseClasses();
+  try {
+    const result = await sendOnDeviceChat({ message: 'Hi', tools: [] });
+    assert.equal(result.text, 'from aiOriginTrial');
+    assert.equal(originTrial.creates.length, 1);
+    // The extension-context namespace was asked first, so the page one never was.
+    assert.equal(windowAi.creates.length, 0);
+    assert.equal(windowAi.availabilityCalls, 0);
+  } finally {
+    uninstallLegacyPromptApiStub();
+  }
+});
+
+test('the capabilities() era maps onto availability, download, and refusal', async () => {
+  // 'readily' → 'available': the text turn just works.
+  let stub = installLegacyPromptApiStub([['Hello.']], { namespace: 'aiOriginTrial', oldCapabilities: true });
+  try {
+    const result = await sendOnDeviceChat({ message: 'Hi', tools: [] });
+    assert.equal(result.text, 'Hello.');
+    assert.equal(stub.creates.length, 1);
+  } finally {
+    uninstallLegacyPromptApiStub();
+  }
+
+  // 'after-download' → 'downloadable': preparing the model starts the
+  // download, reported through the monitor the create() call is handed.
+  stub = installLegacyPromptApiStub([], { namespace: 'aiOriginTrial', oldCapabilities: true });
+  stub.availability = 'after-download';
+  const reported: DownloadProgress[] = [];
+  setOnDeviceModelUi({ onDownloadProgress: (progress) => reported.push(progress) });
+  try {
+    await prepareOnDeviceModel();
+    assert.equal(stub.creates.length, 1);
+    // The session was made only to start the download, then destroyed.
+    assert.equal(stub.destroyed, 1);
+    assert.deepEqual(
+      reported.map(({ resource, percent }) => [resource, percent]),
+      [
+        ['language-model', 0],
+        ['language-model', 50],
+        ['language-model', 100],
+      ]
+    );
+  } finally {
+    uninstallLegacyPromptApiStub();
+  }
+
+  // 'no' → 'unavailable': the chat refuses in the user's words, without ever
+  // asking the factory for a session.
+  stub = installLegacyPromptApiStub([['never streamed']], { namespace: 'aiOriginTrial', oldCapabilities: true });
+  stub.availability = 'no';
+  try {
+    await assert.rejects(
+      () => sendOnDeviceChat({ message: 'Hi', tools: [] }),
+      /unavailable on this device/
+    );
+    assert.equal(stub.creates.length, 0);
+  } finally {
+    uninstallLegacyPromptApiStub();
+  }
+});
+
+test('a session’s inputUsage/inputQuota reaches onContextUsage under the new names', async () => {
+  const stub = installLegacyPromptApiStub([['Hi.'], ['Hi again.']], {
+    namespace: 'aiOriginTrial',
+    oldSessionProps: true,
+  });
+  stub.usagePerTurn = 300;
+  const reported: Array<{ used: number; window: number } | null> = [];
+  setOnDeviceModelUi({ onContextUsage: (usage) => reported.push(usage) });
+  try {
+    await sendOnDeviceChat({ message: 'Hi', tools: [] });
+    await sendOnDeviceChat({ message: 'Hi again', tools: [] });
+    assert.deepEqual(reported, [
+      { used: 0, window: 1000 },
+      { used: 300, window: 1000 },
+      { used: 600, window: 1000 },
+    ]);
+  } finally {
+    uninstallLegacyPromptApiStub();
+  }
+});
+
+test('a create() without initialPrompts support is retried with systemPrompt', async () => {
+  const stub = installLegacyPromptApiStub([['Hello.']], {
+    namespace: 'aiOriginTrial',
+    oldCreateSignature: true,
+  });
+  try {
+    const result = await sendOnDeviceChat({ message: 'Hi', tools: [] });
+    assert.equal(result.text, 'Hello.');
+
+    // The first call was the one the old signature threw at; the retry moved
+    // the system prompt to the option that era understood.
+    assert.equal(stub.creates.length, 2);
+    const retried = stub.creates[1] as { systemPrompt?: string; initialPrompts?: Array<{ role: string }> };
+    assert.ok(retried.systemPrompt?.includes(getSpotlightFence()));
+    assert.equal(retried.initialPrompts?.some((prompt) => prompt.role === 'system'), false);
+    // Only the retry produced a session.
+    assert.equal(stub.sessions.length, 1);
+  } finally {
+    uninstallLegacyPromptApiStub();
+  }
+});
+
+test('a legacy namespace without tool calling degrades a tools request to text', async () => {
+  const stub = installLegacyPromptApiStub([['Booked by text.']], {
+    namespace: 'aiOriginTrial',
+    toolClasses: false,
+  });
+  const warnings: unknown[][] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args);
+  try {
+    // The tools the page offers cannot be declared, but the chat must not fail.
+    const result = await sendOnDeviceChat({ message: 'Book a table', tools: buildToolDecls([BOOK_TOOL]) });
+    assert.equal(result.text, 'Booked by text.');
+    assert.deepEqual(result.functionCalls, []);
+
+    const created = stub.creates[0] as { tools?: unknown; expectedOutputs?: Array<{ type: string }> };
+    assert.equal(created.tools, undefined);
+    assert.ok(!created.expectedOutputs?.some((expected) => expected.type === 'tool-call'));
+    assert.ok(
+      warnings.some((args) => String(args[0]).includes('does not expose tool calling')),
+      'the degradation is warned about once'
+    );
+  } finally {
+    console.warn = warn;
+    uninstallLegacyPromptApiStub();
+  }
+});
+
+test('a legacy namespace with tool calling still gets the tool declarations', async () => {
+  const stub = installLegacyPromptApiStub([['Booked.']], { namespace: 'aiOriginTrial' });
+  try {
+    const result = await sendOnDeviceChat({ message: 'Book a table', tools: buildToolDecls([BOOK_TOOL]) });
+    assert.equal(result.text, 'Booked.');
+
+    const created = stub.creates[0] as { tools?: Array<{ name: string; execute?: unknown }> };
+    assert.deepEqual(created.tools?.map((tool) => tool.name), ['_0_book_table']);
+    // Declarations only: execute() stays on this side.
+    assert.equal(created.tools?.[0].execute, undefined);
+  } finally {
+    uninstallLegacyPromptApiStub();
+  }
+});
+
+test('a native LanguageModel is never overwritten by a legacy namespace', async () => {
+  const native = installPromptApiStub([['from the native API']]);
+  const legacy = createLegacyPromptApiStub([['from the legacy API']]);
+  installLegacyNamespace('ai', legacy.factory);
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const nativeLanguageModel = globals.LanguageModel;
+  try {
+    assert.equal(isPromptApiSupported(), true);
+    // Asking again changed nothing: the native implementation still is the global.
+    assert.equal(globals.LanguageModel, nativeLanguageModel);
+
+    const result = await sendOnDeviceChat({ message: 'Hi', tools: [] });
+    assert.equal(result.text, 'from the native API');
+    assert.equal(native.creates.length, 1);
+    assert.equal(legacy.creates.length, 0);
+    assert.equal(legacy.availabilityCalls, 0);
+  } finally {
+    uninstallLegacyPromptApiStub();
+    uninstallPromptApiStub();
+  }
+});
+
+test('a native LanguageModel without tool classes still fails instead of degrading', async () => {
+  const native = installPromptApiStub([['never streamed']]);
+  const globals = globalThis as unknown as Record<string, unknown>;
+  delete globals.LanguageModelToolCall;
+  const legacy = createLegacyPromptApiStub([['also never streamed']]);
+  installLegacyNamespace('aiOriginTrial', legacy.factory);
+  try {
+    // Native is not legacy: the missing classes still mean a flag to turn on.
+    await assert.rejects(
+      () => sendOnDeviceChat({ message: 'Book a table', tools: buildToolDecls([BOOK_TOOL]) }),
+      /prompt-api-tool-use/
+    );
+    assert.equal(native.creates.length, 0);
+    assert.equal(legacy.creates.length, 0);
+  } finally {
+    uninstallLegacyPromptApiStub();
+    uninstallPromptApiStub();
+  }
+});
+
+test('the shim applies again after a cleanup, for whichever namespace exists', async () => {
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const first = installLegacyPromptApiStub([['from aiOriginTrial']], { namespace: 'aiOriginTrial' });
+  try {
+    assert.equal(isPromptApiSupported(), true);
+    const firstFacade = globals.LanguageModel;
+    const result = await sendOnDeviceChat({ message: 'Hi', tools: [] });
+    assert.equal(result.text, 'from aiOriginTrial');
+    assert.equal(first.creates.length, 1);
+
+    // Gone as though the test never happened: no facade, no namespace.
+    uninstallLegacyPromptApiStub();
+    assert.equal('LanguageModel' in globalThis, false);
+    assert.equal((globals.chrome as Record<string, unknown> | undefined)?.aiOriginTrial, undefined);
+
+    const second = installLegacyPromptApiStub([['from window.ai']], { namespace: 'ai' });
+    assert.equal(isPromptApiSupported(), true);
+    // A fresh facade, for the other namespace's factory.
+    assert.notEqual(globals.LanguageModel, firstFacade);
+    const secondResult = await sendOnDeviceChat({ message: 'Hi', tools: [] });
+    assert.equal(secondResult.text, 'from window.ai');
+    assert.equal(second.creates.length, 1);
+    assert.equal(first.creates.length, 1);
+  } finally {
+    uninstallLegacyPromptApiStub();
+  }
+});

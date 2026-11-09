@@ -3,8 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Evaluated before `easy-language-model`, so the legacy-namespace facade is
+// installed as `globalThis.LanguageModel` early enough for a wrapper that
+// reads the global while being evaluated rather than lazily.
+import './promptApiCompat.js';
 import { EasyLanguageModel } from 'easy-language-model';
 import { buildSystemInstruction } from '../../../shared/systemPrompt.ts';
+import { ensurePromptApiShim, isLegacyPromptApi } from './promptApiCompat.js';
 import { DEFAULT_TOOL_ROUND_LIMITS, ToolRoundLimitError } from './toolRoundLimits.js';
 import { type ChatTurnRequest, type ChatTurnResponse, type ToolDeclaration, UserFacingError } from '../types/index.js';
 
@@ -53,6 +58,9 @@ function getSystemInstruction(): string {
 
 /** Whether the browser exposes the Prompt API at all. */
 export function isPromptApiSupported(): boolean {
+  // A legacy namespace can appear after this module evaluated, so the shim is
+  // offered another chance before the global is checked.
+  ensurePromptApiShim();
   return 'LanguageModel' in globalThis;
 }
 
@@ -287,6 +295,32 @@ function toPromptApiTools(tools: ToolDeclaration[] = []) {
     description: tool.description || '',
     inputSchema: tool.parameters || { type: 'object', properties: {} },
   }));
+}
+
+/** Whether the one warning about a tool-less legacy backend has been logged. */
+let warnedAboutMissingToolCalling = false;
+
+/**
+ * The declarations a session may actually be created with. A legacy namespace
+ * without the tool classes cannot call tools, so its sessions are made with
+ * none: the conversation degrades to text instead of failing the tool-use
+ * check in `createSession`. A native `LanguageModel` without the classes
+ * still fails that check — there it means a flag to turn on, not an API era
+ * to degrade for.
+ */
+function effectivePromptApiTools(request: ChatTurnRequest): PromptApiTool[] {
+  // The shim may not have applied yet if no earlier call asked for it.
+  ensurePromptApiShim();
+  if (isLegacyPromptApi() && !isToolUseSupported()) {
+    if (!warnedAboutMissingToolCalling) {
+      warnedAboutMissingToolCalling = true;
+      console.warn(
+        '[WebMCP] The legacy Prompt API namespace does not expose tool calling; continuing without WebMCP tools.'
+      );
+    }
+    return [];
+  }
+  return toPromptApiTools(request.tools);
 }
 
 /**
@@ -588,7 +622,7 @@ async function buildSession(
 async function getSession(request: ChatTurnRequest, signal?: AbortSignal): Promise<OnDeviceSession> {
   await current?.compacting;
 
-  const tools = toPromptApiTools(request.tools);
+  const tools = effectivePromptApiTools(request);
   const sameChat = !current || !request.chatId || current.id === request.chatId;
   const reusable =
     current &&
@@ -893,7 +927,7 @@ export async function sendOnDeviceChat(
     // Capture before summary rebuilds put stopped-turn calls into initial history.
     const completedHistory = stopOnToolCall ? historyBeforeTurn(state) : undefined;
 
-    const tools = toPromptApiTools(request.tools);
+    const tools = effectivePromptApiTools(request);
     try {
       if (state.declarations !== JSON.stringify(tools)) {
         if (tools.length > 0) return await continueWithNewTools(state, turn, tools, signal, completedHistory);
@@ -930,7 +964,7 @@ export async function sendOnDeviceChat(
     // The failed turn never made it into the history, so what is replayed is
     // the conversation up to it. When it did not fit, that is without the tool
     // results that filled the context.
-    const tools = toPromptApiTools(request.tools);
+    const tools = effectivePromptApiTools(request);
     const history = toReplayHistory(state.session.history, tools.length > 0 && !contextFull);
     const rebuilt = await buildSession(state.id, tools, history, signal);
     return startTurn(rebuilt, message, signal, onText, stopOnToolCall);

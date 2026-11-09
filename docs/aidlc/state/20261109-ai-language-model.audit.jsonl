@@ -1,0 +1,40 @@
+{"ts":"2026-11-09T02:56:29.099Z","event":"intake","detail":"scope=standard"}
+{"ts":"2026-11-09T02:56:34.051Z","event":"stage_result","stage":"intake","result":"pass","next":"ideation","detail":{"stage":"intake","result":"pass","next":"ideation"}}
+{"ts":"2026-11-09T02:56:34.055Z","event":"stage_enter","stage":"ideation"}
+{"ts":"2026-11-09T03:14:48.805Z","event":"ideation","detail":"3問実施: window.ai.languageModel をフォールバック対象とし、旧APIではツール無し会話のみ、変更範囲は設計に委任"}
+{"ts":"2026-11-09T03:14:49.000Z","event":"stage_result","stage":"ideation","result":"pass","next":"architect","detail":{"stage":"ideation","result":"pass","next":"architect"}}
+{"ts":"2026-11-09T03:14:49.004Z","event":"stage_enter","stage":"architect"}
+{"ts":"2026-11-09T03:19:22.572Z","event":"stage_result","stage":"architect","result":"pass","next":"artifact-lint","detail":{"stage":"architect","result":"pass","next":"artifact-lint"}}
+{"ts":"2026-11-09T03:19:22.605Z","event":"stage_enter","stage":"artifact-lint"}
+{"ts":"2026-11-09T03:19:30.110Z","event":"stage_result","stage":"artifact-lint","result":"pass","next":"gate-design","detail":{"stage":"artifact-lint","result":"pass","next":"gate-design","run":{"errors":[]}}}
+{"ts":"2026-11-09T03:19:30.116Z","event":"stage_enter","stage":"gate-design"}
+{"ts":"2026-11-09T03:19:36.095Z","event":"graph","level":"all","format":"mermaid","out":"docs/aidlc/20261109-ai-language-model.graph.md"}
+{"ts":"2026-11-09T03:27:56.364Z","event":"stage_result","stage":"gate-design","result":"pass","next":"implement","detail":{"stage":"gate-design","result":"pass","next":"implement"}}
+{"ts":"2026-11-09T03:27:56.368Z","event":"stage_enter","stage":"implement"}
+{"ts":"2026-11-09T03:28:08.063Z","event":"lock","wave":"WU-1,WU-2,WU-3","out":"docs/aidlc/state/20261109-ai-language-model.lock.json"}
+{"ts":"2026-11-09T03:33:13.787Z","event":"scope","clean":true,"changed":8,"violations":[]}
+{"ts":"2026-11-09T03:33:21.424Z","event":"state","complete":["WU-1"],"fail":[],"redo":[],"retry":false}
+{"ts":"2026-11-09T03:34:37.243Z","event":"scope","clean":true,"changed":9,"violations":[]}
+{"ts":"2026-11-09T03:34:37.378Z","event":"state","complete":["WU-2"],"fail":[],"redo":[],"retry":false}
+{"ts":"2026-11-09T03:40:14.849Z","event":"scope","clean":true,"changed":10,"violations":[]}
+{"ts":"2026-11-09T03:40:14.915Z","event":"state","complete":["WU-3"],"fail":[],"redo":[],"retry":false}
+{"ts":"2026-11-09T03:40:20.602Z","event":"unlock","removed":true}
+{"ts":"2026-11-09T03:40:20.658Z","event":"stage_result","stage":"implement","result":"pass","next":"sensor","detail":{"stage":"implement","result":"pass","next":"sensor"}}
+{"ts":"2026-11-09T03:40:20.663Z","event":"stage_enter","stage":"sensor"}
+{"ts":"2026-11-09T03:40:37.809Z","event":"stage_result","stage":"sensor","result":"pass","next":"review","detail":{"stage":"sensor","result":"pass","next":"review","run":{"commands":[{"cmd":"npm run typecheck","exit":0},{"cmd":"npm run test:unit","exit":0}]}}}
+{"ts":"2026-11-09T03:40:37.817Z","event":"stage_enter","stage":"review"}
+{"ts":"2026-11-09T04:34:17.521Z","event":"review","detail":"blackhat: PASS (minor 5件)"}
+{"ts":"2026-11-09T04:34:17.632Z","event":"review","detail":"typist: PASS (minor 6件)"}
+{"ts":"2026-11-09T04:34:17.747Z","event":"stage_result","stage":"review","result":"pass","next":"learn","detail":{"stage":"review","result":"pass","next":"learn"}}
+{"ts":"2026-11-09T04:34:17.752Z","event":"stage_enter","stage":"learn"}
+{"ts":"2026-11-09T04:34:30.454Z","event":"learn","added":true,"promoted":0,"rejected":0}
+{"ts":"2026-11-09T04:34:30.524Z","event":"learn","added":true,"promoted":0,"rejected":0}
+{"ts":"2026-11-09T04:34:30.597Z","event":"learn","added":true,"promoted":0,"rejected":0}
+{"ts":"2026-11-09T04:34:30.670Z","event":"learn","added":true,"promoted":0,"rejected":0}
+{"ts":"2026-11-09T04:34:30.746Z","event":"learn","added":true,"promoted":0,"rejected":0}
+{"ts":"2026-11-09T04:37:53.985Z","event":"learn","added":false,"promoted":4,"rejected":0}
+{"ts":"2026-11-09T04:37:54.056Z","event":"learn","added":false,"promoted":0,"rejected":1}
+{"ts":"2026-11-09T04:37:59.291Z","event":"stage_result","stage":"learn","result":"pass","next":"done","detail":{"stage":"learn","result":"pass","next":"done"}}
+{"ts":"2026-11-09T04:37:59.296Z","event":"stage_enter","stage":"done"}
+{"ts":"2026-11-09T04:37:59.307Z","event":"done","stage":"done"}
+{"ts":"2026-11-09T04:37:59.448Z","event":"graph","level":"all","format":"mermaid","out":"docs/aidlc/20261109-ai-language-model.graph.md"}
